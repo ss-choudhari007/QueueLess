@@ -1,0 +1,61 @@
+# ─────────────────────────────────────────────────────────────
+# QueueLess — .gitignore
+# Prevents secrets, build output, and generated files from
+# being accidentally committed to Git.
+# ─────────────────────────────────────────────────────────────
+
+# ── Environment / Secrets ────────────────────────────────────
+# NEVER commit .env files. They contain database URLs, API keys,
+# JWT secrets, and other credentials that must stay private.
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+.env.*.local
+
+# ── Node.js dependencies ─────────────────────────────────────
+# The node_modules folder is large and is re-created by running
+# "npm install". It must never be committed.
+node_modules/
+frontend/node_modules/
+backend/node_modules/
+
+# ── Build output ─────────────────────────────────────────────
+# Vite compiles the React app into a "dist" folder.
+# This is generated code — not source code.
+frontend/dist/
+frontend/.vite/
+
+# ── Prisma generated client ──────────────────────────────────
+# Prisma generates database client code from schema.prisma.
+# Only the schema file itself should be committed.
+backend/src/prisma/generated/
+
+# ── Log files ────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Operating system files ───────────────────────────────────
+.DS_Store          # macOS folder metadata
+Thumbs.db          # Windows thumbnail cache
+desktop.ini
+
+# ── Editor / IDE settings ────────────────────────────────────
+# These are personal editor preferences and should not be shared.
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# ── Test coverage reports ────────────────────────────────────
+coverage/
+.nyc_output/
+
+# ── Miscellaneous ────────────────────────────────────────────
+*.pem              # Certificate/key files
+.cache/
+tmp/
