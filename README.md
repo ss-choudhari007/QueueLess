@@ -36,8 +36,8 @@ QueueLess/
 │   ├── PROJECT_SPEC.md     ← What the application must do (rules + roles)
 │   ├── API_CONTRACT.md     ← How the frontend and backend communicate
 │   └── HANDOFF.md          ← Progress log, decisions, and next step
-├── frontend/               ← React application (set up in Part 2)
-└── backend/                ← Node.js + Express server (set up in Part 2)
+├── frontend/               ← React application (set up in Part 3)
+└── backend/                ← Node.js + Express server (set up in Part 2 ✅)
 ```
 
 ---
@@ -56,8 +56,6 @@ QueueLess/
 
 ## Setup Instructions
 
-> ⚠️ This section will be filled in during Part 2 (Backend Setup) and Part 3 (Frontend Setup).
-
 ### 1. Clone the repository
 
 ```bash
@@ -68,7 +66,17 @@ cd Queueless
 ### 2. Set up the backend
 
 ```bash
-# Instructions coming in Part 2
+# Go into the backend folder
+cd backend
+
+# Install all dependencies listed in package.json
+npm install
+
+# Copy the environment variable template
+cp .env.example .env
+
+# Open .env in any text editor and fill in your real values
+# (DATABASE_URL from Neon, etc.) — see .env.example for guidance
 ```
 
 ### 3. Set up the frontend
@@ -79,30 +87,48 @@ cd Queueless
 
 ### 4. Environment variables
 
-You will be given a file called `.env.example` in the `backend/` folder.
+A file called `backend/.env.example` shows every variable the server needs.
 Copy it and fill in your own values:
 
 ```bash
-cp backend/.env.example backend/.env
-# Then open backend/.env and fill in your Neon database URL and other secrets
+cd backend
+cp .env.example .env
+# Then open .env and fill in your real values
 ```
 
 > ⚠️ **Never share or commit the `.env` file.** It is listed in `.gitignore` and will not be tracked by Git.
+
+### Variables you will need to fill in
+
+| Variable | When you need it | Where to get it |
+|---|---|---|
+| `PORT` | Now | Leave as `4000` |
+| `DATABASE_URL` | Part 2 Step 2 | Neon dashboard → Connection Details |
+| `JWT_SECRET` | Part 4 | Generate with `node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"` |
+| `NODE_ENV` | Now | Use `development` locally |
+| `FRONTEND_URL` | Now | Leave as `http://localhost:5173` |
 
 ---
 
 ## Running the Application Locally
 
-> ⚠️ Instructions coming in Parts 2 and 3.
+### Start the backend (Part 2 ✅)
 
 ```bash
-# Start the backend server
 cd backend
 npm run dev
+# You should see: ✅ QueueLess backend is running on http://localhost:4000
+```
 
-# In a separate terminal window, start the frontend
-cd frontend
-npm run dev
+Then open your browser and go to: **http://localhost:4000/api/health**
+
+You should see a JSON response saying `"status": "ok"`.
+
+
+### Start the frontend (coming in Part 3)
+
+```bash
+# Instructions coming in Part 3
 ```
 
 ---
@@ -132,7 +158,8 @@ This is a step-by-step educational project. Work is organized in phases:
 | Phase | Description | Status |
 |---|---|---|
 | Part 1 | Architecture, documentation, Git setup | ✅ Complete |
-| Part 2 | Backend scaffold, database schema, Prisma | 🔜 Next |
+| Part 2 Step 1 | Backend scaffold, Express server, health endpoint | ✅ Complete |
+| Part 2 Step 2 | Prisma setup, database schema, migrations | 🔜 Next |
 | Part 3 | Frontend scaffold, routing, Tailwind setup | — |
 | Part 4 | Authentication (register, login, logout) | — |
 | Part 5 | Queue join, token, and real-time updates | — |
