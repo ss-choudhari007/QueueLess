@@ -1,87 +1,89 @@
 // ─────────────────────────────────────────────────────────────
 // QueueLess — backend/server.js
 //
-// This is the entry point for the backend server.
-// It starts an Express HTTP server on the configured port.
+// Entry point for the backend server.
 //
-// What this file does right now (Part 2, Step 1):
-//   - Loads environment variables from the .env file
-//   - Creates an Express application
-//   - Configures CORS so the React frontend can call this server
-//   - Provides a GET /api/health endpoint for verifying the server is up
-//   - Starts listening for requests on the configured PORT
+// What this file does (Part 2, Step 2):
+//   - Loads environment variables from .env
+//   - Creates a shared Prisma database client
+//   - Verifies database connectivity at startup (fails fast if DB is unreachable)
+//   - Provides GET /api/health that reports both server and DB status
+//   - Handles 404s with a consistent JSON error format
 //
 // What will be added in later parts:
-//   - Database connection (Part 2 Step 2)
 //   - Authentication routes and middleware (Part 4)
 //   - Queue routes, staff routes, owner routes (Parts 5–7)
 //   - Socket.IO for real-time updates (Part 5)
 // ─────────────────────────────────────────────────────────────
 
 // ── 1. Load environment variables ────────────────────────────
-// dotenv reads the .env file and makes its values available via
-// process.env. This must be the very first thing we do.
+// dotenv reads .env and populates process.env. Must be first.
 import 'dotenv/config';
 
-// ── 2. Import packages ────────────────────────────────────────
+// ── 2. Imports ────────────────────────────────────────────────
 import express from 'express';
 import cors from 'cors';
+import { PrismaClient } from '@prisma/client';
 
-// ── 3. Read configuration from environment variables ─────────
-// If PORT is not set in .env, fall back to 4000.
+// ── 3. Create shared Prisma client ────────────────────────────
+// One PrismaClient instance is shared by the whole server.
+// It manages a connection pool to the PostgreSQL database.
+// Never create a new PrismaClient per request.
+export const prisma = new PrismaClient({
+  log: process.env.NODE_ENV === 'development'
+    ? ['warn', 'error']  // Log warnings and errors in development
+    : ['error'],          // Log only errors in production
+});
+
+// ── 4. Read configuration ─────────────────────────────────────
 const PORT = process.env.PORT || 4000;
-
-// The URL of the frontend. Requests from this origin are allowed.
-// In development this is typically http://localhost:5173 (Vite).
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
-// ── 4. Create the Express application ────────────────────────
+// ── 5. Create Express application ────────────────────────────
 const app = express();
 
-// ── 5. Configure middleware ────────────────────────────────────
-// Middleware is code that runs on every request before your route
-// handlers run.
+// ── 6. Middleware ─────────────────────────────────────────────
 
-// CORS (Cross-Origin Resource Sharing):
-// Browsers block requests from one website (the React frontend at
-// localhost:5173) to a different website (this server at localhost:4000)
-// unless the server explicitly allows it. This middleware does that.
+// CORS: allows the React frontend (on a different port) to call this API.
+// credentials: true is required for HTTP-only cookies to be sent.
 app.use(
   cors({
     origin: FRONTEND_URL,
-    credentials: true, // Required for cookies to be sent cross-origin
+    credentials: true,
   })
 );
 
-// JSON body parser:
-// When the frontend sends JSON data in a request body (e.g., on login),
-// this middleware parses it and makes it available as req.body.
+// JSON body parser: parses JSON request bodies into req.body.
 app.use(express.json());
 
-// ── 6. Routes ─────────────────────────────────────────────────
+// ── 7. Routes ─────────────────────────────────────────────────
 
-// Health check endpoint
-// This is a simple endpoint that the frontend (and developers) can call
-// to confirm the server is running and accepting requests.
-//
-// Example: GET http://localhost:4000/api/health
-// Response: { "status": "ok", "message": "...", "timestamp": "..." }
-//
-// IMPORTANT: This endpoint does NOT check the database.
-// It only confirms the server process itself is alive.
-// Database connectivity will be verified separately in Part 2 Step 2.
-app.get('/api/health', (_req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    message: 'QueueLess backend is running. Database is not yet connected.',
+// Health check endpoint — reports server AND database status.
+// Calling this after startup tells you whether both layers are working.
+// GET /api/health
+app.get('/api/health', async (_req, res) => {
+  let dbStatus = 'unknown';
+  try {
+    // $queryRaw with a trivial query — confirms the DB is reachable.
+    // No application data is read or written.
+    await prisma.$queryRaw`SELECT 1`;
+    dbStatus = 'connected';
+  } catch {
+    dbStatus = 'unreachable';
+  }
+
+  const isHealthy = dbStatus === 'connected';
+  res.status(isHealthy ? 200 : 503).json({
+    status: isHealthy ? 'ok' : 'degraded',
+    server: 'running',
+    database: dbStatus,
     environment: process.env.NODE_ENV || 'development',
     timestamp: new Date().toISOString(),
   });
 });
 
-// ── 7. 404 handler ────────────────────────────────────────────
-// If a request reaches here, no route above matched it.
-// Return a clear error instead of Express's default HTML error page.
+// ── 8. 404 handler ────────────────────────────────────────────
+// Any request that didn't match a route above lands here.
 app.use((_req, res) => {
   res.status(404).json({
     success: false,
@@ -92,13 +94,31 @@ app.use((_req, res) => {
   });
 });
 
-// ── 8. Start the server ───────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`✅ QueueLess backend is running on http://localhost:${PORT}`);
-  console.log(`   Health check: http://localhost:${PORT}/api/health`);
-  console.log(`   Environment : ${process.env.NODE_ENV || 'development'}`);
-  console.log(`   Frontend URL: ${FRONTEND_URL}`);
-  console.log('─────────────────────────────────────────────────');
-  console.log('   Database    : Not connected (Part 2 Step 2)');
-  console.log('   Auth        : Not implemented (Part 4)');
-});
+// ── 9. Startup: verify DB connectivity, then start server ─────
+async function startServer() {
+  // Attempt a real database ping before accepting traffic.
+  // This catches misconfigured DATABASE_URL immediately at startup.
+  try {
+    await prisma.$connect();
+    await prisma.$queryRaw`SELECT 1`;
+    console.log('✅ Database connection: verified (Neon PostgreSQL)');
+  } catch (err) {
+    // Print only the error message — never the connection string.
+    console.error('❌ Database connection failed:', err.message);
+    console.error('   Check DATABASE_URL in backend/.env');
+    console.error('   The server will NOT start without a working database connection.');
+    await prisma.$disconnect();
+    process.exit(1); // Exit with error — fail fast so problems are visible immediately
+  }
+
+  app.listen(PORT, () => {
+    console.log(`✅ QueueLess backend is running on http://localhost:${PORT}`);
+    console.log(`   Health check : http://localhost:${PORT}/api/health`);
+    console.log(`   Environment  : ${process.env.NODE_ENV || 'development'}`);
+    console.log(`   Frontend URL : ${FRONTEND_URL}`);
+    console.log('─────────────────────────────────────────────────');
+    console.log('   Auth         : Not implemented (Part 4)');
+  });
+}
+
+startServer();

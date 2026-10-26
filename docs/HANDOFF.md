@@ -1,11 +1,10 @@
 # QueueLess — Handoff Document
 
-**Version**: 1.1
+**Version**: 1.3
 **Last updated**: 2026-10-26
-**Current phase**: Part 2, Step 1 — Minimal Express Backend ✅ COMPLETE
+**Current phase**: Part 2 Complete ✅ — Ready for Part 3 (Frontend Scaffold)
 
-> This document is always kept up to date. If you come back to this project after any break,
-> read this file first. It tells you exactly where things stand and what to do next.
+> Read this file first whenever you return to the project. It tells you exactly where things stand and what to do next.
 
 ---
 
@@ -14,21 +13,31 @@
 | Item | Status |
 |---|---|
 | Git repository | ✅ Initialized |
-| `.gitignore` | ✅ Created and verified |
-| `README.md` | ✅ Updated with backend setup instructions |
+| `.gitignore` | ✅ Updated — Prisma path corrected, migration policy documented |
+| `README.md` | ✅ Updated |
 | `docs/PROJECT_SPEC.md` | ✅ Complete (Part 1) |
 | `docs/API_CONTRACT.md` | ✅ Complete (Part 1) |
 | `docs/HANDOFF.md` | ✅ Up to date (this file) |
-| Part 1 Git commit | ✅ `ba662a4` on `main` |
-| Part 2 Step 1 Git commit | ❌ Not yet created — see Section 7 |
-| `backend/package.json` | ✅ Created — ES modules, express + dotenv + cors + nodemon |
-| `backend/server.js` | ✅ Created — Express server, `/api/health`, 404 handler |
-| `backend/.env.example` | ✅ Created — safe placeholder template |
-| `backend/.env` | ✅ Created locally — no real secrets, gitignored |
-| `backend/node_modules/` | ✅ Installed — 99 packages, 0 vulnerabilities |
-| `GET /api/health` tested | ✅ Returns HTTP 200 + correct JSON (verified) |
-| `GET /api/nonexistent` tested | ✅ Returns HTTP 404 + correct error JSON (verified) |
-| Database (Neon/Prisma) | ❌ Not configured — Part 2, Step 2 |
+| Part 1 Git commit | ✅ `ba662a4` |
+| Part 2 Step 1 Git commit | ✅ `2eac38b` |
+| Part 2 Step 2 Git commit | ❌ Not yet created — see Section 7 |
+| `backend/package.json` | ✅ Prisma scripts added |
+| `backend/server.js` | ✅ Updated — PrismaClient, startup DB check, health reports DB status |
+| `backend/.env.example` | ✅ Updated DATABASE_URL guidance |
+| `backend/.env` | ✅ DATABASE_URL set — gitignored, verified non-empty |
+| `backend/prisma/schema.prisma` | ✅ Audited and corrected — 3 enums, 7 models |
+| `backend/prisma/migrations/` | ✅ `20261026102918_init` applied to Neon |
+| Prisma 5.22.0 installed | ✅ Both `prisma` and `@prisma/client` at 5.22.0 |
+| `prisma format` | ✅ Passed |
+| `prisma validate` | ✅ Passed |
+| `prisma generate` | ✅ Passed — client in `node_modules/@prisma/client` |
+| `DATABASE_URL` configured | ✅ Set in `backend/.env` — Neon host verified |
+| Neon TCP connectivity | ✅ Confirmed |
+| Initial migration applied | ✅ `20261026102918_init` — all 7 tables created |
+| Tables in Neon (`neondb`) | ✅ `users`, `organizations`, `services`, `queue_entries`, `daily_counters`, `refresh_tokens`, `queue_settings` |
+| Startup DB connectivity check | ✅ Server refuses to start if DB is unreachable |
+| `GET /api/health` | ✅ Returns `database: "connected"` and HTTP 200 when DB is up |
+| 404 handler | ✅ Returns JSON with `NOT_FOUND` code |
 | Authentication | ❌ Not implemented — Part 4 |
 | Frontend | ❌ Not started — Part 3 |
 | Deployment | ❌ Not started — Part 9 |
@@ -38,187 +47,220 @@
 ## 2. What Was Completed
 
 ### Part 1 — Architecture Planning and Documentation (2026-10-25)
-
-1. Initialized Git repository.
-2. Created `.gitignore` protecting `.env`, `node_modules/`, `dist/`, secrets.
-3. Created `README.md`, `docs/PROJECT_SPEC.md`, `docs/API_CONTRACT.md`, `docs/HANDOFF.md`.
-4. Committed as `ba662a4`: *"Part 1: Project specification, API contract, and documentation"*
+Committed as `ba662a4`.
 
 ### Part 2, Step 1 — Minimal Express Backend (2026-10-26)
+Committed as `2eac38b`. Express server confirmed running. `GET /api/health` returns HTTP 200.
 
-1. Created `backend/package.json`:
-   - `"type": "module"` — uses ES modules (`import`/`export`), not CommonJS (`require`)
-   - Production dependencies: `express` (web framework), `dotenv` (env vars), `cors` (cross-origin)
-   - Dev dependency: `nodemon` (auto-restart on file save during development)
-2. Ran `npm install` inside `backend/` — 99 packages installed, 0 vulnerabilities.
-3. Created `backend/.env.example` — safe template with blank `DATABASE_URL` and `JWT_SECRET`.
-4. Created `backend/.env` from `.env.example` — contains no real secrets (all sensitive fields blank).
-5. Created `backend/server.js`:
-   - Loads `.env` variables via `import 'dotenv/config'`
-   - Configures CORS for the future React frontend (`FRONTEND_URL` from `.env`)
-   - Configures `express.json()` body parser
-   - `GET /api/health` — returns `{ status: "ok", message: "...", environment: "...", timestamp: "..." }`
-   - 404 fallback handler — returns `{ success: false, error: { code: "NOT_FOUND", ... } }`
-6. Updated `README.md` — added real backend setup commands and environment variable table.
-7. Cleaned `backend/.env` — removed accidental duplicate `PORT=4000` line.
+### Part 2, Step 2 — Prisma, Schema, Migration, Startup Check (2026-10-26)
 
-### Verified test results (2026-10-26)
+**Not yet committed** — see Section 7 for exact commands.
 
-```
-GET /api/health      → HTTP 200  {"status":"ok","message":"QueueLess backend is running..."}
-GET /api/nonexistent → HTTP 404  {"success":false,"error":{"code":"NOT_FOUND",...}}
-```
+#### Prisma Installation
+- Both `prisma` and `@prisma/client` pinned to exactly `5.22.0` via `--save-exact`.
+- Node.js v24.14.0 is fully supported by Prisma v5.
 
-Both confirmed with live `curl` against a running server instance.
+#### Schema Design
+`backend/prisma/schema.prisma` — 3 enums, 7 models:
 
----
+**Enums**:
+- `UserRole`: `customer`, `staff`, `owner`
+- `TokenStatus`: `waiting`, `called`, `serving`, `completed`, `cancelled`, `no_show`
+- `CancellationReason`: `customer`, `queue_closed` *(added in schema audit — prevents invalid string values)*
 
-## 3. Approved Decisions (recorded for future reference)
+**Models**:
 
-| # | Decision | Details |
+| Model | Table | Key constraints |
 |---|---|---|
-| D-1 | Folder names | `frontend/` and `backend/` (not `client/` and `server/`) |
-| D-2 | Language | English for all code comments and documentation |
-| D-3 | Version control | Git initialized; `.gitignore` excludes `.env`, `node_modules`, `dist`, secrets |
-| D-4 | Platform admin | No platform-admin role in the initial implementation |
-| D-5 | Authentication | HTTP-only cookies (JWT access token 15 min + random refresh token 7 days). No `localStorage`. See PROJECT_SPEC.md Section 5 |
-| D-6 | Token uniqueness | Concurrency-safe via atomic `UPDATE daily_counters SET count = count + 1 RETURNING count` + unique DB constraint. See PROJECT_SPEC.md Section 4.1 |
-| D-7 | QR verification | Short-lived (5 min), single-use `qr_secret` in DB. Staff scan does NOT confirm arrival — customer must confirm in-app. See PROJECT_SPEC.md Section 4.7 |
-| D-8 | No-show enforcement | Deadlines persisted in DB (`no_show_deadline` column). Background job runs on startup + every 1 minute. No in-memory-only timers. See PROJECT_SPEC.md Section 4.5 |
-| D-9 | Daily reset | Tokens filtered by `date` column (YYYY-MM-DD). Counter starts fresh per date. `waiting` tokens auto-cancelled at queue close. See PROJECT_SPEC.md Section 4.6 |
-| D-10 | Estimated wait time | `queue_position × service.avg_duration_minutes` using fixed configured value (not live average) in the initial implementation |
-| D-11 | Technology | React + Vite + Tailwind CSS + JavaScript (frontend); Node.js + Express + JavaScript (backend); PostgreSQL on Neon; Prisma ORM; Socket.IO |
-| D-12 | No TypeScript | JavaScript only unless explicitly approved by the project owner |
+| `User` | `users` | `email @unique`; nullable `organizationId` for staff/owner |
+| `Organization` | `organizations` | `ownerId @unique` — one org per owner |
+| `Service` | `services` | `@@index([organizationId])` |
+| `QueueEntry` | `queue_entries` | `@@unique([organizationId, serviceId, date, tokenNumber])` — duplicate token safety; `noShowAt` timestamp added in audit |
+| `DailyCounter` | `daily_counters` | `@@unique([organizationId, serviceId, date])` — one counter per org/service/day |
+| `RefreshToken` | `refresh_tokens` | `tokenHash @unique` — raw token never stored |
+| `QueueSettings` | `queue_settings` | `organizationId @unique` — 1-to-1 with Organization |
+
+#### Schema Audit Corrections
+| Finding | Fix |
+|---|---|
+| `cancellationReason String?` allowed any value | Changed to `CancellationReason` enum (exactly `customer`, `queue_closed`) |
+| No timestamp when no-show recorded | Added `noShowAt DateTime? @db.Timestamptz` |
+| `waiting → no_show` in spec diagram | Confirmed spec error: background job only targets `status='called'`. Schema is correct. |
+| Staff invitation pending state | Deferred — added as Open Decision OD-8 |
+
+#### Validation Results (all commands run and confirmed)
+| Command | Result |
+|---|---|
+| `prisma format` | ✅ Formatted in 15ms |
+| `prisma validate` | ✅ "The schema is valid 🚀" |
+| `prisma generate` | ✅ "Generated Prisma Client (v5.22.0) in 44ms" |
+
+#### Migration
+- Applied: `20261026102918_init`
+- Database: `neondb` at Neon (ap-southeast-1)
+- Tables created: `users`, `organizations`, `services`, `queue_entries`, `daily_counters`, `refresh_tokens`, `queue_settings`
+- Verified via `information_schema.tables` query — all 7 tables confirmed
+
+#### Server Updates (`backend/server.js`)
+- Added shared `PrismaClient` export (one instance for whole server)
+- `startServer()` async function — pings DB with `SELECT 1` before `app.listen()`
+- Server exits with code 1 if DB is unreachable (fail fast)
+- `GET /api/health` now queries `SELECT 1` and returns `database: "connected"` or `"unreachable"`
+- HTTP 200 when healthy, HTTP 503 when DB is down
+
+#### Smoke Tests (actual results)
+| Test | Result |
+|---|---|
+| Server startup with valid DB | ✅ "Database connection: verified (Neon PostgreSQL)" |
+| `GET /api/health` | ✅ `{"status":"ok","database":"connected"}` |
+| `GET /api/nonexistent` | ✅ `{"success":false,"error":{"code":"NOT_FOUND",...}}` |
+| `git diff --check` | ✅ PASSED |
+| `backend/.env` protected | ✅ `.gitignore:10:.env` |
+| `backend/node_modules` protected | ✅ `.gitignore:22` |
 
 ---
 
-## 4. Git History
+## 3. Schema Design Notes
 
-### Existing commits
+### Token number safety (Section 4.1)
+Generated by atomic `UPDATE daily_counters SET current_count = current_count + 1 WHERE ... RETURNING current_count`. The `@@unique` on `QueueEntry` is a DB-level safety net. Both together prevent duplicates under concurrent load.
 
-```
-ba662a4  Part 1: Project specification, API contract, and documentation
-```
+### No-show deadline (Section 4.5)
+`noShowDeadline` persisted in DB at the moment a token is `called`. Background job (Part 8): `WHERE status = 'called' AND no_show_deadline < NOW()`. Survives server restarts.
 
-### Pending (not yet committed) — Part 2, Step 1
+### QR verification (Section 4.7)
+- `qrSecret` (`@db.Uuid`): random UUID generated when token is `called`
+- `qrExpiresAt`: 5 minutes after `calledAt`
+- `qrUsed`: `true` after staff scans — one-time use
+- Customer must separately confirm — scan alone does not confirm arrival
 
-These files have been created/modified and are verified working. They are ready to be committed once you run the commands in Section 7.
-
-**New files (untracked):**
-- `backend/.env.example`
-- `backend/package.json`
-- `backend/package-lock.json`
-- `backend/server.js`
-
-**Modified files:**
-- `README.md`
-- `docs/HANDOFF.md`
-
-**Excluded from commit (gitignored):**
-- `backend/.env` — local secrets file, never committed
-- `backend/node_modules/` — generated by `npm install`, never committed
-
-### Before every future commit
-
-Run these commands and check the output carefully before committing:
-
-```bash
-# 1. See what files have changed
-git status
-
-# 2. See the exact lines that changed
-git diff
-
-# 3. Confirm no .env or secret files are staged
-#    If you see .env in the output of git status under "Changes to be committed", do NOT commit.
-```
+### Organization isolation
+Every model with org-sensitive data carries `organizationId`. The server must filter by `organizationId` on every protected query (enforced at application layer — Part 5+).
 
 ---
 
-## 5. Open Decisions (unanswered questions)
+## 4. Approved Decisions
 
-These must be resolved before the relevant phase begins. They are fully listed in `docs/PROJECT_SPEC.md` Section 9.
+| # | Decision |
+|---|---|
+| D-1 | Folders: `frontend/` and `backend/` |
+| D-2 | Language: English for all code and docs |
+| D-3 | Git: `.gitignore` excludes `.env`, `node_modules`, `dist`, secrets |
+| D-4 | No platform-admin role in initial implementation |
+| D-5 | Auth: HTTP-only cookies. JWT 15 min + random refresh 7 days. No `localStorage`. |
+| D-6 | Token uniqueness: atomic `DailyCounter` increment + DB `@@unique` safety net |
+| D-7 | QR: short-lived (5 min), single-use `qrSecret`. Customer must confirm; scan alone does not confirm. |
+| D-8 | No-show: `noShowDeadline` persisted in DB. Background job on startup + every 1 min. |
+| D-9 | Daily reset: `date` column isolates days. `waiting` tokens auto-cancelled at close. |
+| D-10 | EWT: `position × avgDurationMinutes` (fixed, not live average) |
+| D-11 | Stack: React + Vite + Tailwind + JS / Node + Express + JS / Neon PostgreSQL / Prisma 5 / Socket.IO |
+| D-12 | No TypeScript unless explicitly approved |
+| D-13 | Prisma version: 5.22.0 (stable GA, pinned) |
+
+---
+
+## 5. Open Decisions
 
 | ID | Question | Must decide before |
 |---|---|---|
 | OD-1 | What happens to a `serving` token at queue close time? | Part 8 |
 | OD-2 | What happens to a `called` token at queue close time? | Part 8 |
-| OD-3 | Can a customer rejoin the same queue after cancelling on the same day? | Part 5 |
-| OD-4 | Use live rolling average for EWT instead of fixed configured value? | Part 5 |
-| OD-5 | What exactly does "pause queue" mean for staff? | Part 6 |
-| OD-6 | Can a customer have more than one active token for the same service/day? | Part 5 |
-| OD-7 | What happens if the customer's app is not open when their token is called? | Part 6 |
+| OD-3 | Can a customer rejoin the same service after cancelling on the same day? | Part 5 |
+| OD-4 | Use live rolling average for EWT instead of fixed value? | Part 5 |
+| OD-5 | What exactly does "pause queue" mean — blocks joins, stops calling, or both? | Part 6 |
+| OD-6 | Can a customer hold more than one active token for the same service/day? | Part 5 |
+| OD-7 | What if the customer's app is not open when their token is called? | Part 6 |
+| OD-8 | Staff invitation: what if the invited email has no account yet? Store pending invite? | Part 6 |
 
 ---
 
-## 6. Known Issues / Notes
+## 6. Git History
 
-- None. All Part 2, Step 1 work is verified and clean.
+```
+2eac38b  Complete Part 2 Step 1: Express backend setup
+ba662a4  Part 1: Project specification, API contract, and documentation
+```
+
+### Pending (unstaged) — Part 2, Step 2
+
+**Modified:**
+- `.gitignore` — corrected Prisma path, documented migration policy
+- `README.md` — Prisma setup commands, phase tracker
+- `backend/.env.example` — improved DATABASE_URL guidance
+- `backend/package.json` — Prisma scripts added
+- `backend/package-lock.json` — updated by npm
+- `backend/server.js` — PrismaClient, startup check, health reports DB status
+- `docs/HANDOFF.md` — this file
+
+**New (untracked):**
+- `backend/prisma/schema.prisma`
+- `backend/prisma/migrations/20261026102918_init/migration.sql`
+- `backend/prisma/migrations/migration_lock.toml`
+
+**Protected (must NOT be staged):**
+- `backend/.env` ✅ gitignored
 
 ---
 
 ## 7. Git Checkpoint — Commands to Run Yourself
 
-Before staging, confirm the files are what you expect:
-
 ```bash
 cd /Users/shreyashchoudhari/Desktop/Queueless
 
-# Step 1: Review overall status
-git status
-
-# Step 2: Confirm .env is NOT shown (it must stay out of Git)
+# Step 1: Confirm .env is protected
 git check-ignore -v backend/.env
-# Expected output: .gitignore:10:.env   backend/.env
+# Expected: .gitignore:10:.env   backend/.env
 
-# Step 3: Stage only the intended files
+# Step 2: Stage files individually — never use git add .
+git add .gitignore
 git add README.md
-git add docs/HANDOFF.md
 git add backend/.env.example
 git add backend/package.json
 git add backend/package-lock.json
 git add backend/server.js
+git add backend/prisma/schema.prisma
+git add backend/prisma/migrations/
+git add docs/HANDOFF.md
 
-# Step 4: Review exactly what is staged before committing
+# Step 3: Review what's staged
 git status
 git diff --staged
 
-# Step 5: Create the commit
-git commit -m "Part 2 Step 1: Minimal Express backend with health endpoint
+# Step 4: Commit
+git commit -m "Part 2 Step 2: Prisma schema, migration, and startup DB check
 
-- Add backend/package.json (ES modules, express, dotenv, cors, nodemon)
-- Add backend/server.js (GET /api/health, 404 handler, CORS, env config)
-- Add backend/.env.example (safe template, no real secrets)
-- Add backend/package-lock.json (locked dependency versions)
-- Update README.md with backend setup commands
-- Update docs/HANDOFF.md with verified Part 2 Step 1 status
+- Add backend/prisma/schema.prisma (3 enums, 7 models, all constraints)
+  - Schema audited: added CancellationReason enum, noShowAt timestamp
+- Install prisma@5.22.0 and @prisma/client@5.22.0 (pinned)
+- Apply initial migration: 20261026102918_init (neondb, Neon PostgreSQL)
+  - Tables: users, organizations, services, queue_entries,
+            daily_counters, refresh_tokens, queue_settings
+- Update server.js: PrismaClient, startup fail-fast DB connectivity check
+- Update GET /api/health to report database: connected/unreachable
+- Add Prisma npm scripts to package.json
+- Fix .gitignore: remove stale Prisma path, document migration policy
+- Update README.md and docs/HANDOFF.md with verified results
 
-Health endpoint tested: GET /api/health returns HTTP 200.
-No database connection, authentication, or Prisma in this step."
+All tests pass: prisma validate, prisma generate, startup check,
+health endpoint (database: connected), 404 handler."
+
+# Step 5 (optional): Push to GitHub
+git push origin main
 ```
 
-> ⚠️ **Do not run `git add .` or `git add backend/`** — that would accidentally stage `backend/.env` if gitignore had a gap. Always add files individually as shown above.
+> ⚠️ **Do not use `git add .`** — always add files individually to prevent accidentally staging `.env`.
 
 ---
 
-## 8. The Next Step (Part 2, Step 2)
+## 8. The Next Step — Part 3: Frontend Scaffold
 
-> Do not begin Part 2, Step 2 until the project owner explicitly approves **and** the Git checkpoint above has been committed.
+**Part 3: React + Vite Frontend**
 
-**Part 2, Step 2: Prisma Setup and Database Schema**
+- Create `frontend/` using Vite + React + JavaScript
+- Add Tailwind CSS for styling
+- Set up React Router for page navigation
+- Create placeholder pages: Home, Browse Organizations, Queue Status, Login
+- Configure `frontend/.env.example` with `VITE_API_URL`
+- Verify the frontend can reach `GET /api/health` and display the result
 
-1. Install Prisma: `npm install prisma @prisma/client` inside `backend/`.
-2. Initialize Prisma: `npx prisma init --datasource-provider postgresql` — this creates `backend/prisma/schema.prisma` and adds `DATABASE_URL` guidance.
-3. Add your Neon `DATABASE_URL` to `backend/.env` (never to `.env.example`).
-4. Write the full Prisma schema based on the data model in `PROJECT_SPEC.md` Section 6:
-   - `users`, `organizations`, `services`, `staff_members`
-   - `queue_entries` (with all status fields, QR fields, timestamps)
-   - `daily_counters`, `refresh_tokens`, `queue_settings`
-5. Run `npx prisma migrate dev --name init` to push the schema to Neon.
-6. Verify the tables exist in the Neon console.
-7. Confirm Prisma client can connect by adding a temporary startup check.
-8. Update `README.md` and `docs/HANDOFF.md`.
-
-**Before starting Part 2, Step 2**, you will need:
-- Your Neon `DATABASE_URL` ready to paste into `backend/.env`.
-- Confirmation from the project owner to proceed.
+When ready, tell me to continue with Part 3.

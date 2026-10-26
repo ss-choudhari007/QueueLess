@@ -28,9 +28,12 @@ frontend/dist/
 frontend/.vite/
 
 # ── Prisma generated client ──────────────────────────────────
-# Prisma generates database client code from schema.prisma.
-# Only the schema file itself should be committed.
-backend/src/prisma/generated/
+# Prisma generates database client code into node_modules/@prisma/client.
+# That folder is already covered by node_modules/ above.
+# The only Prisma file that should be committed is:
+#   backend/prisma/schema.prisma   ← source of truth for the schema
+# Migration SQL files are also committed:
+#   backend/prisma/migrations/     ← committed so everyone shares the same schema history
 
 # ── Log files ────────────────────────────────────────────────
 *.log

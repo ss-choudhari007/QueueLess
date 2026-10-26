@@ -75,8 +75,15 @@ npm install
 # Copy the environment variable template
 cp .env.example .env
 
-# Open .env in any text editor and fill in your real values
-# (DATABASE_URL from Neon, etc.) — see .env.example for guidance
+# Open .env in your text editor
+# Fill in DATABASE_URL from your Neon dashboard (see Section 4 below)
+
+# Generate the Prisma database client
+npm run db:generate
+
+# Run the database migration (creates all tables in Neon)
+# When prompted for a migration name, type: init
+npm run db:migrate
 ```
 
 ### 3. Set up the frontend
@@ -103,8 +110,8 @@ cp .env.example .env
 | Variable | When you need it | Where to get it |
 |---|---|---|
 | `PORT` | Now | Leave as `4000` |
-| `DATABASE_URL` | Part 2 Step 2 | Neon dashboard → Connection Details |
-| `JWT_SECRET` | Part 4 | Generate with `node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"` |
+| `DATABASE_URL` | **Now (required for migration)** | Neon dashboard → Connection Details |
+| `JWT_SECRET` | Part 4 | Generate with: `node -e "require('crypto').randomBytes(64).toString('hex')"` |
 | `NODE_ENV` | Now | Use `development` locally |
 | `FRONTEND_URL` | Now | Leave as `http://localhost:5173` |
 
@@ -159,8 +166,8 @@ This is a step-by-step educational project. Work is organized in phases:
 |---|---|---|
 | Part 1 | Architecture, documentation, Git setup | ✅ Complete |
 | Part 2 Step 1 | Backend scaffold, Express server, health endpoint | ✅ Complete |
-| Part 2 Step 2 | Prisma setup, database schema, migrations | 🔜 Next |
-| Part 3 | Frontend scaffold, routing, Tailwind setup | — |
+| Part 2 Step 2 | Prisma schema, Neon migration, startup DB check | ✅ Complete |
+| Part 3 | Frontend scaffold, routing, Tailwind setup | 🔜 Next |
 | Part 4 | Authentication (register, login, logout) | — |
 | Part 5 | Queue join, token, and real-time updates | — |
 | Part 6 | Staff dashboard and QR verification flow | — |
