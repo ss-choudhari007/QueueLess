@@ -7,12 +7,28 @@
 # ── Environment / Secrets ────────────────────────────────────
 # NEVER commit .env files. They contain database URLs, API keys,
 # JWT secrets, and other credentials that must stay private.
+# Every .env variant in every folder is ignored (.env, .env.local,
+# .env.production, .env.staging, backend/.env, …). Only placeholder
+# templates named *.env.example may be committed.
 .env
-.env.local
-.env.development
-.env.production
-.env.test
-.env.*.local
+.env.*
+*.env
+!.env.example
+!*.env.example
+
+# Other files that commonly hold credentials or private keys
+.npmrc
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets/
+credentials.json
+service-account*.json
+
+# Hosting CLIs store local project links/tokens here
+.vercel/
+.render/
 
 # ── Node.js dependencies ─────────────────────────────────────
 # The node_modules folder is large and is re-created by running
@@ -68,5 +84,10 @@ coverage/
 tmp/
 
 # ── Local tooling ────────────────────────────────────────────
-# Local dev-server launcher used by the Claude desktop app (not part of the app).
+# Machine-specific Claude files stay local. Shared project instructions
+# (e.g. CLAUDE.md or .claude/settings.json) are NOT ignored on purpose.
+# launch.json: local dev-server launcher for the Claude desktop app.
 .claude/launch.json
+# settings.local.json: personal Claude Code settings and permissions.
+.claude/settings.local.json
+CLAUDE.local.md
