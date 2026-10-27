@@ -1,0 +1,33 @@
+# Render blueprint for the QueueLess API (Socket.IO + the no-show worker need a
+# persistent Node server, which Vercel cannot host). See docs/DEPLOYMENT.md.
+# Secrets are NOT stored here: Render prompts for every "sync: false" value.
+#
+# Defaults below match the recommended setup: the frontend on Vercel forwards
+# /api and /socket.io to this service, so cookies are first-party (Safari-safe).
+services:
+  - type: web
+    name: queueless-api
+    runtime: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm ci && npx prisma migrate deploy
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false # your Vercel URL, e.g. https://queueless.vercel.app (no trailing slash)
+      - key: APP_URL
+        sync: false # same as FRONTEND_URL
+      # Requests arrive through two proxies (Vercel → Render), so the real
+      # client IP is two hops back; needed for correct per-user rate limits.
+      - key: TRUST_PROXY
+        value: "2"
+      # Same-site through the Vercel proxy → Lax cookies work in every browser.
+      - key: COOKIE_SAMESITE
+        value: lax

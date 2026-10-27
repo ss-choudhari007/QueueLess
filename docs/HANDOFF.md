@@ -1,266 +1,123 @@
 # QueueLess — Handoff Document
 
-**Version**: 1.3
-**Last updated**: 2026-10-26
-**Current phase**: Part 2 Complete ✅ — Ready for Part 3 (Frontend Scaffold)
+**Version**: 2.0
+**Last updated**: 2026-10-27
+**Current phase**: Full-stack application implemented and verified locally. Not committed, not deployed.
 
-> Read this file first whenever you return to the project. It tells you exactly where things stand and what to do next.
-
----
-
-## 1. Current Status
-
-| Item | Status |
-|---|---|
-| Git repository | ✅ Initialized |
-| `.gitignore` | ✅ Updated — Prisma path corrected, migration policy documented |
-| `README.md` | ✅ Updated |
-| `docs/PROJECT_SPEC.md` | ✅ Complete (Part 1) |
-| `docs/API_CONTRACT.md` | ✅ Complete (Part 1) |
-| `docs/HANDOFF.md` | ✅ Up to date (this file) |
-| Part 1 Git commit | ✅ `ba662a4` |
-| Part 2 Step 1 Git commit | ✅ `2eac38b` |
-| Part 2 Step 2 Git commit | ❌ Not yet created — see Section 7 |
-| `backend/package.json` | ✅ Prisma scripts added |
-| `backend/server.js` | ✅ Updated — PrismaClient, startup DB check, health reports DB status |
-| `backend/.env.example` | ✅ Updated DATABASE_URL guidance |
-| `backend/.env` | ✅ DATABASE_URL set — gitignored, verified non-empty |
-| `backend/prisma/schema.prisma` | ✅ Audited and corrected — 3 enums, 7 models |
-| `backend/prisma/migrations/` | ✅ `20261026102918_init` applied to Neon |
-| Prisma 5.22.0 installed | ✅ Both `prisma` and `@prisma/client` at 5.22.0 |
-| `prisma format` | ✅ Passed |
-| `prisma validate` | ✅ Passed |
-| `prisma generate` | ✅ Passed — client in `node_modules/@prisma/client` |
-| `DATABASE_URL` configured | ✅ Set in `backend/.env` — Neon host verified |
-| Neon TCP connectivity | ✅ Confirmed |
-| Initial migration applied | ✅ `20261026102918_init` — all 7 tables created |
-| Tables in Neon (`neondb`) | ✅ `users`, `organizations`, `services`, `queue_entries`, `daily_counters`, `refresh_tokens`, `queue_settings` |
-| Startup DB connectivity check | ✅ Server refuses to start if DB is unreachable |
-| `GET /api/health` | ✅ Returns `database: "connected"` and HTTP 200 when DB is up |
-| 404 handler | ✅ Returns JSON with `NOT_FOUND` code |
-| Authentication | ❌ Not implemented — Part 4 |
-| Frontend | ❌ Not started — Part 3 |
-| Deployment | ❌ Not started — Part 9 |
+> Read this first when you return to the project. It records what exists, what was verified and what is left.
 
 ---
 
-## 2. What Was Completed
+## 1. Status at a glance
 
-### Part 1 — Architecture Planning and Documentation (2026-10-25)
-Committed as `ba662a4`.
-
-### Part 2, Step 1 — Minimal Express Backend (2026-10-26)
-Committed as `2eac38b`. Express server confirmed running. `GET /api/health` returns HTTP 200.
-
-### Part 2, Step 2 — Prisma, Schema, Migration, Startup Check (2026-10-26)
-
-**Not yet committed** — see Section 7 for exact commands.
-
-#### Prisma Installation
-- Both `prisma` and `@prisma/client` pinned to exactly `5.22.0` via `--save-exact`.
-- Node.js v24.14.0 is fully supported by Prisma v5.
-
-#### Schema Design
-`backend/prisma/schema.prisma` — 3 enums, 7 models:
-
-**Enums**:
-- `UserRole`: `customer`, `staff`, `owner`
-- `TokenStatus`: `waiting`, `called`, `serving`, `completed`, `cancelled`, `no_show`
-- `CancellationReason`: `customer`, `queue_closed` *(added in schema audit — prevents invalid string values)*
-
-**Models**:
-
-| Model | Table | Key constraints |
-|---|---|---|
-| `User` | `users` | `email @unique`; nullable `organizationId` for staff/owner |
-| `Organization` | `organizations` | `ownerId @unique` — one org per owner |
-| `Service` | `services` | `@@index([organizationId])` |
-| `QueueEntry` | `queue_entries` | `@@unique([organizationId, serviceId, date, tokenNumber])` — duplicate token safety; `noShowAt` timestamp added in audit |
-| `DailyCounter` | `daily_counters` | `@@unique([organizationId, serviceId, date])` — one counter per org/service/day |
-| `RefreshToken` | `refresh_tokens` | `tokenHash @unique` — raw token never stored |
-| `QueueSettings` | `queue_settings` | `organizationId @unique` — 1-to-1 with Organization |
-
-#### Schema Audit Corrections
-| Finding | Fix |
+| Area | Status |
 |---|---|
-| `cancellationReason String?` allowed any value | Changed to `CancellationReason` enum (exactly `customer`, `queue_closed`) |
-| No timestamp when no-show recorded | Added `noShowAt DateTime? @db.Timestamptz` |
-| `waiting → no_show` in spec diagram | Confirmed spec error: background job only targets `status='called'`. Schema is correct. |
-| Staff invitation pending state | Deferred — added as Open Decision OD-8 |
+| Database schema + migrations | ✅ `20261026102918_init` + `20261027090000_core_workflows` applied to Neon (`neondb`) |
+| Backend API (auth, public, customer, staff, owner, invites) | ✅ Implemented |
+| Socket.IO (cookie auth, authorized rooms) | ✅ Implemented |
+| Background processor (no-shows, end of day) | ✅ Runs at startup and every 30 s |
+| Frontend (all public, customer, staff, owner screens) | ✅ Implemented, production build passes |
+| Automated backend tests | ✅ 86 tests (isolated `queueless_test` database) — see §3 for the latest run |
+| Demo seed data | ✅ Seeded into the development database (`@queueless.demo` accounts) |
+| Documentation | ✅ README, PROJECT_SPEC, API_CONTRACT, this file |
+| Git commit / push | ❌ Not done (waiting for your approval) |
+| Deployment | ❌ Not done (needs your Vercel/Render accounts) |
 
-#### Validation Results (all commands run and confirmed)
-| Command | Result |
+## 2. What changed in this phase
+
+**Database** (`backend/prisma/schema.prisma`, new migration `20261027090000_core_workflows`)
+- Upper-case canonical enums: `TokenStatus` (`WAITING`…`NO_SHOW`), `UserRole`, `CancellationReason`. New `MembershipRole` (`STAFF`, `SUPERVISOR`).
+- New tables: `staff_memberships`, `staff_invites`, `qr_credentials`, `customer_restrictions`, `audit_logs`.
+- Organizations gained `slug`, `category`, `city`, `email`, `timezone` and `isActive`. One owner may own several organizations.
+- Queue settings use `weeklyHours` (7 days), `noShowGracePeriodMinutes` (default 5) and `qrTtlSeconds`.
+- `queue_entries` uses `serviceDate` plus arrival/cancellation timestamps and `noShowExcused`. The QR columns moved to `qr_credentials`.
+- Partial unique index: one active token per customer, service and date.
+- The migration aborts if the restructured tables contain data. They were empty when it was applied (verified before applying).
+
+**Backend** (`backend/src/…`): see README "Project structure". Express was upgraded to v5 (native async errors). New dependencies: helmet, cookie-parser, express-rate-limit, zod, bcryptjs, jsonwebtoken, socket.io. Dev dependencies: vitest, supertest, socket.io-client.
+
+**Frontend** (`frontend/`): new React 19 + Vite + Tailwind 4 app with shared UI components, an API client (CSRF + refresh), a socket client, and all screens.
+
+**Local environment**: `backend/.env` previously had an empty `JWT_SECRET`. A random value was generated and written there (never printed). No other `.env` values were changed.
+
+**Test database**: a separate database `queueless_test` was created on the same Neon project for automated tests. Tests refuse to run against any database whose name lacks `test`.
+
+## 3. Verification performed (actual results)
+
+| Check | Result |
 |---|---|
-| `prisma format` | ✅ Formatted in 15ms |
-| `prisma validate` | ✅ "The schema is valid 🚀" |
-| `prisma generate` | ✅ "Generated Prisma Client (v5.22.0) in 44ms" |
+| `npx prisma validate` / `prisma migrate deploy` | ✅ valid; all migrations applied |
+| `npm test` (backend) | ✅ all passing (auth, platform, queue, tenancy, qr, noshow, realtime, owner) |
+| `npm run build` (frontend) | ✅ builds; charts and scanner are code-split and load on demand |
+| Server start + `/api/health` | ✅ `200 {"database":"connected"}` |
+| Browser walkthrough (built-in browser, desktop + 375 px mobile) | ✅ see below |
 
-#### Migration
-- Applied: `20261026102918_init`
-- Database: `neondb` at Neon (ap-southeast-1)
-- Tables created: `users`, `organizations`, `services`, `queue_entries`, `daily_counters`, `refresh_tokens`, `queue_settings`
-- Verified via `information_schema.tables` query — all 7 tables confirmed
+Manual browser walkthrough on 2026-10-27:
+1. Landing page and organization search rendered with seeded data.
+2. Signed in as `customer@queueless.demo` and joined CityCare → General Consultation: received **GC-006**, 5 ahead, ~50 min estimate, QR and manual code shown.
+3. Staff (separate session) called next 6 times. The customer page switched live to "It's your turn" with a 5:00 countdown, without reloading.
+4. Staff verified the customer's manual code. The customer's browser showed the **Confirm your arrival** dialog, and the token stayed unconfirmed until "I'm here" was clicked. Replaying the code was rejected.
+5. Staff console in the browser showed "Arrival confirmed". Start service → Complete worked, and the token moved to "Finished today".
+6. The other 5 called tokens were automatically marked `NO_SHOW` by the worker about 20 s after their deadlines.
+7. Owner: organization list, analytics (stats + charts), services, hours, and staff invitation link creation all worked.
+8. Mobile (375 px): staff console has no horizontal overflow.
 
-#### Server Updates (`backend/server.js`)
-- Added shared `PrismaClient` export (one instance for whole server)
-- `startServer()` async function — pings DB with `SELECT 1` before `app.listen()`
-- Server exits with code 1 if DB is unreachable (fail fast)
-- `GET /api/health` now queries `SELECT 1` and returns `database: "connected"` or `"unreachable"`
-- HTTP 200 when healthy, HTTP 503 when DB is down
+Release audit (2026-10-27, second pass):
+- Browser-verified additional workflows: owner sign-up → create organization → add service; staff invitation → new staff account → console; customer sign-up → search → join → cancel → history; cross-organization console shows "No access".
+- Production smoke test: `vite build` + `vite preview` against the API running with `NODE_ENV=production` (proxy, same-site setup): sign-in, join, live socket and cancel all work; cookies are `HttpOnly; Secure; SameSite=Lax`; helmet headers present; no console errors.
+- Fixed: zod upgraded to 4.6.7 (npm audit high advisory) with update schemas restructured so partial PATCHes never reset fields (new regression test); the timezone dropdown displayed "Africa/Abidjan" for organizations stored as "Asia/Kolkata"; the seed now refuses databases containing non-demo accounts; unseed is a dry run unless `-- --confirm` is passed.
 
-#### Smoke Tests (actual results)
-| Test | Result |
-|---|---|
-| Server startup with valid DB | ✅ "Database connection: verified (Neon PostgreSQL)" |
-| `GET /api/health` | ✅ `{"status":"ok","database":"connected"}` |
-| `GET /api/nonexistent` | ✅ `{"success":false,"error":{"code":"NOT_FOUND",...}}` |
-| `git diff --check` | ✅ PASSED |
-| `backend/.env` protected | ✅ `.gitignore:10:.env` |
-| `backend/node_modules` protected | ✅ `.gitignore:22` |
+Issues found and fixed during the first verification: forged JWTs caused a 500 (now 401); the post-login redirect ignored `?next=`; the staff console now defaults to the busiest service; badges no longer wrap; the spent QR is hidden after a scan; the tab title updates after confirmation.
 
----
+## 4. How to run
 
-## 3. Schema Design Notes
+See README → Setup / Running locally / Tests. Short version:
 
-### Token number safety (Section 4.1)
-Generated by atomic `UPDATE daily_counters SET current_count = current_count + 1 WHERE ... RETURNING current_count`. The `@@unique` on `QueueEntry` is a DB-level safety net. Both together prevent duplicates under concurrent load.
+```bash
+cd backend && npm install && npm run db:migrate:deploy && npm run dev
+```
 
-### No-show deadline (Section 4.5)
-`noShowDeadline` persisted in DB at the moment a token is `called`. Background job (Part 8): `WHERE status = 'called' AND no_show_deadline < NOW()`. Survives server restarts.
+```bash
+cd frontend && npm install && npm run dev
+```
 
-### QR verification (Section 4.7)
-- `qrSecret` (`@db.Uuid`): random UUID generated when token is `called`
-- `qrExpiresAt`: 5 minutes after `calledAt`
-- `qrUsed`: `true` after staff scans — one-time use
-- Customer must separately confirm — scan alone does not confirm arrival
+## 5. Demo checklist (suggested order)
 
-### Organization isolation
-Every model with org-sensitive data carries `organizationId`. The server must filter by `organizationId` on every protected query (enforced at application layer — Part 5+).
+1. Landing page → **Find a queue** → filter by city "Pune" → open **CityCare Clinic** (or **Sunrise Hospital OPD**, open 24/7).
+2. Sign in as `customer@queueless.demo` (`Demo@12345`) → **Join queue** → show the token page (people ahead, estimate, QR, manual code).
+3. In a second browser or a private window (cookies are per browser), sign in as `staff@queueless.demo` → Queue console → choose the same organization and service.
+4. Staff: **Call next** until the customer's token is called. The customer's page updates live with the countdown.
+5. Staff: **Scan QR** with the phone camera, or **Enter code** with the 6-character code. The customer gets the **I'm here** prompt. Show that **Start service** stays disabled until the customer confirms.
+6. Customer taps **I'm here** → staff **Start service** → **Complete**. The customer sees "Service completed" and the token appears in **History**.
+7. Show the grace period: call another token and wait 5 minutes, or explain the countdown. It becomes a no-show automatically.
+8. Sign in as `supervisor@queueless.demo` → excuse a no-show with a reason → open the **Activity log**.
+9. Sign in as `owner@queueless.demo` → CityCare → Overview checklist, **Services** (add/deactivate), **Hours & queue**, **Staff** (create an invitation link), **Analytics** (7/30/90 days, service filter), **Restrictions**.
+10. Security talking points: open `/staff/<another org id>` as staff → "No access"; customers cannot open other tokens; sign out everywhere.
 
----
+## 6. Environment variables you must set
 
-## 4. Approved Decisions
+Backend (`backend/.env`): `DATABASE_URL`, `JWT_SECRET`, `FRONTEND_URL`, `NODE_ENV` (all already present locally). Optional: see `backend/.env.example`.
+Frontend: none locally. In production `VITE_API_URL` only, or leave it empty when proxying `/api`.
+
+## 7. Known limitations / next steps
+
+1. **Deploy** following README → Deployment (not done — requires your accounts; deployment is therefore unverified). Use a same-site setup (custom domain, or the Vercel `/api` proxy) so Safari/iOS keep the session cookies. Use a separate Neon branch for production and do not seed it.
+2. Optional: a browser end-to-end suite (Playwright) to automate the manual walkthrough above.
+3. Optional: email delivery for staff invitations (links are currently copied manually).
+4. Optional: Socket.IO Redis adapter if the backend is scaled to several instances.
+5. Optional: web push or SMS notifications. Notifications are currently in-app only.
+
+## 8. Approved decisions (cumulative)
 
 | # | Decision |
 |---|---|
-| D-1 | Folders: `frontend/` and `backend/` |
-| D-2 | Language: English for all code and docs |
-| D-3 | Git: `.gitignore` excludes `.env`, `node_modules`, `dist`, secrets |
-| D-4 | No platform-admin role in initial implementation |
-| D-5 | Auth: HTTP-only cookies. JWT 15 min + random refresh 7 days. No `localStorage`. |
-| D-6 | Token uniqueness: atomic `DailyCounter` increment + DB `@@unique` safety net |
-| D-7 | QR: short-lived (5 min), single-use `qrSecret`. Customer must confirm; scan alone does not confirm. |
-| D-8 | No-show: `noShowDeadline` persisted in DB. Background job on startup + every 1 min. |
-| D-9 | Daily reset: `date` column isolates days. `waiting` tokens auto-cancelled at close. |
-| D-10 | EWT: `position × avgDurationMinutes` (fixed, not live average) |
-| D-11 | Stack: React + Vite + Tailwind + JS / Node + Express + JS / Neon PostgreSQL / Prisma 5 / Socket.IO |
-| D-12 | No TypeScript unless explicitly approved |
-| D-13 | Prisma version: 5.22.0 (stable GA, pinned) |
-
----
-
-## 5. Open Decisions
-
-| ID | Question | Must decide before |
-|---|---|---|
-| OD-1 | What happens to a `serving` token at queue close time? | Part 8 |
-| OD-2 | What happens to a `called` token at queue close time? | Part 8 |
-| OD-3 | Can a customer rejoin the same service after cancelling on the same day? | Part 5 |
-| OD-4 | Use live rolling average for EWT instead of fixed value? | Part 5 |
-| OD-5 | What exactly does "pause queue" mean — blocks joins, stops calling, or both? | Part 6 |
-| OD-6 | Can a customer hold more than one active token for the same service/day? | Part 5 |
-| OD-7 | What if the customer's app is not open when their token is called? | Part 6 |
-| OD-8 | Staff invitation: what if the invited email has no account yet? Store pending invite? | Part 6 |
-
----
-
-## 6. Git History
-
-```
-2eac38b  Complete Part 2 Step 1: Express backend setup
-ba662a4  Part 1: Project specification, API contract, and documentation
-```
-
-### Pending (unstaged) — Part 2, Step 2
-
-**Modified:**
-- `.gitignore` — corrected Prisma path, documented migration policy
-- `README.md` — Prisma setup commands, phase tracker
-- `backend/.env.example` — improved DATABASE_URL guidance
-- `backend/package.json` — Prisma scripts added
-- `backend/package-lock.json` — updated by npm
-- `backend/server.js` — PrismaClient, startup check, health reports DB status
-- `docs/HANDOFF.md` — this file
-
-**New (untracked):**
-- `backend/prisma/schema.prisma`
-- `backend/prisma/migrations/20261026102918_init/migration.sql`
-- `backend/prisma/migrations/migration_lock.toml`
-
-**Protected (must NOT be staged):**
-- `backend/.env` ✅ gitignored
-
----
-
-## 7. Git Checkpoint — Commands to Run Yourself
-
-```bash
-cd /Users/shreyashchoudhari/Desktop/Queueless
-
-# Step 1: Confirm .env is protected
-git check-ignore -v backend/.env
-# Expected: .gitignore:10:.env   backend/.env
-
-# Step 2: Stage files individually — never use git add .
-git add .gitignore
-git add README.md
-git add backend/.env.example
-git add backend/package.json
-git add backend/package-lock.json
-git add backend/server.js
-git add backend/prisma/schema.prisma
-git add backend/prisma/migrations/
-git add docs/HANDOFF.md
-
-# Step 3: Review what's staged
-git status
-git diff --staged
-
-# Step 4: Commit
-git commit -m "Part 2 Step 2: Prisma schema, migration, and startup DB check
-
-- Add backend/prisma/schema.prisma (3 enums, 7 models, all constraints)
-  - Schema audited: added CancellationReason enum, noShowAt timestamp
-- Install prisma@5.22.0 and @prisma/client@5.22.0 (pinned)
-- Apply initial migration: 20261026102918_init (neondb, Neon PostgreSQL)
-  - Tables: users, organizations, services, queue_entries,
-            daily_counters, refresh_tokens, queue_settings
-- Update server.js: PrismaClient, startup fail-fast DB connectivity check
-- Update GET /api/health to report database: connected/unreachable
-- Add Prisma npm scripts to package.json
-- Fix .gitignore: remove stale Prisma path, document migration policy
-- Update README.md and docs/HANDOFF.md with verified results
-
-All tests pass: prisma validate, prisma generate, startup check,
-health endpoint (database: connected), 404 handler."
-
-# Step 5 (optional): Push to GitHub
-git push origin main
-```
-
-> ⚠️ **Do not use `git add .`** — always add files individually to prevent accidentally staging `.env`.
-
----
-
-## 8. The Next Step — Part 3: Frontend Scaffold
-
-**Part 3: React + Vite Frontend**
-
-- Create `frontend/` using Vite + React + JavaScript
-- Add Tailwind CSS for styling
-- Set up React Router for page navigation
-- Create placeholder pages: Home, Browse Organizations, Queue Status, Login
-- Configure `frontend/.env.example` with `VITE_API_URL`
-- Verify the frontend can reach `GET /api/health` and display the result
-
-When ready, tell me to continue with Part 3.
+| D-1 | Folders: `frontend/` and `backend/` in one repository |
+| D-2 | English for code and docs |
+| D-3 | `.env`, `node_modules`, `dist` and secrets are gitignored |
+| D-4 | No platform-admin role |
+| D-5 | HttpOnly cookie sessions (15 min JWT + 7-day DB refresh token), no `localStorage` |
+| D-6 | Canonical upper-case statuses (`SERVING` for in-service) |
+| D-7 | Five-minute default grace; 3 no-shows / 30 days → 72 h restriction per organization |
+| D-8 | Arrival requires staff QR/code validation **and** explicit customer confirmation |
+| D-9 | Staff are invited by single-use link; owners may own several organizations; staff may work for several |
+| D-10 | Tests run against a separate database whose name must contain `test` |

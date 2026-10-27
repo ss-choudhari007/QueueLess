@@ -1,124 +1,100 @@
 // ─────────────────────────────────────────────────────────────
 // QueueLess — backend/server.js
 //
-// Entry point for the backend server.
+// Entry point: validates configuration, starts the HTTP server and
+// Socket.IO, waits for the database (retrying, never crashing on a slow or
+// briefly unavailable database), then starts the background processor.
 //
-// What this file does (Part 2, Step 2):
-//   - Loads environment variables from .env
-//   - Creates a shared Prisma database client
-//   - Verifies database connectivity at startup (fails fast if DB is unreachable)
-//   - Provides GET /api/health that reports both server and DB status
-//   - Handles 404s with a consistent JSON error format
-//
-// What will be added in later parts:
-//   - Authentication routes and middleware (Part 4)
-//   - Queue routes, staff routes, owner routes (Parts 5–7)
-//   - Socket.IO for real-time updates (Part 5)
+// Resilience:
+//   • Missing/invalid configuration → clear message, exit (cannot run safely).
+//   • Database unavailable → keep serving; /api/health and API calls return
+//     503 until it is back; connection is retried with backoff.
+//   • Port already in use → clear message, clean exit (port never changed).
+//   • Unhandled promise rejection → logged, server keeps running.
+//   • Uncaught exception → logged, graceful shutdown, exit(1) so the host
+//     (Render/Railway/nodemon) restarts a clean process.
+//   • SIGTERM/SIGINT (deploys) → graceful shutdown with a 10 s safety limit.
 // ─────────────────────────────────────────────────────────────
+import http from 'node:http';
+import { assertConfig, config } from './src/config.js';
+import { dbErrorSummary, prisma, waitForDatabase } from './src/db.js';
+import { createApp } from './src/app.js';
+import { createSocketServer } from './src/socket.js';
+import { startWorker, stopWorker } from './src/worker.js';
 
-// ── 1. Load environment variables ────────────────────────────
-// dotenv reads .env and populates process.env. Must be first.
-import 'dotenv/config';
-
-// ── 2. Imports ────────────────────────────────────────────────
-import express from 'express';
-import cors from 'cors';
-import { PrismaClient } from '@prisma/client';
-
-// ── 3. Create shared Prisma client ────────────────────────────
-// One PrismaClient instance is shared by the whole server.
-// It manages a connection pool to the PostgreSQL database.
-// Never create a new PrismaClient per request.
-export const prisma = new PrismaClient({
-  log: process.env.NODE_ENV === 'development'
-    ? ['warn', 'error']  // Log warnings and errors in development
-    : ['error'],          // Log only errors in production
-});
-
-// ── 4. Read configuration ─────────────────────────────────────
-const PORT = process.env.PORT || 4000;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
-
-// ── 5. Create Express application ────────────────────────────
-const app = express();
-
-// ── 6. Middleware ─────────────────────────────────────────────
-
-// CORS: allows the React frontend (on a different port) to call this API.
-// credentials: true is required for HTTP-only cookies to be sent.
-app.use(
-  cors({
-    origin: FRONTEND_URL,
-    credentials: true,
-  })
-);
-
-// JSON body parser: parses JSON request bodies into req.body.
-app.use(express.json());
-
-// ── 7. Routes ─────────────────────────────────────────────────
-
-// Health check endpoint — reports server AND database status.
-// Calling this after startup tells you whether both layers are working.
-// GET /api/health
-app.get('/api/health', async (_req, res) => {
-  let dbStatus = 'unknown';
+function start() {
   try {
-    // $queryRaw with a trivial query — confirms the DB is reachable.
-    // No application data is read or written.
-    await prisma.$queryRaw`SELECT 1`;
-    dbStatus = 'connected';
-  } catch {
-    dbStatus = 'unreachable';
+    assertConfig();
+  } catch (error) {
+    console.error(`❌ ${error.message}`);
+    console.error('   Copy backend/.env.example to backend/.env and fill in the values.');
+    process.exit(1);
   }
 
-  const isHealthy = dbStatus === 'connected';
-  res.status(isHealthy ? 200 : 503).json({
-    status: isHealthy ? 'ok' : 'degraded',
-    server: 'running',
-    database: dbStatus,
-    environment: process.env.NODE_ENV || 'development',
-    timestamp: new Date().toISOString(),
+  const app = createApp();
+  const server = http.createServer(app);
+  const io = createSocketServer(server);
+  let shuttingDown = false;
+
+  const shutdown = async (reason, exitCode = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n${reason} — shutting down`);
+    // Never hang a deploy: force exit if cleanup takes too long.
+    setTimeout(() => process.exit(exitCode || 1), 10_000).unref();
+    stopWorker();
+    io.close();
+    server.closeAllConnections?.();
+    await prisma.$disconnect().catch(() => {});
+    process.exit(exitCode);
+  };
+
+  // Fail clearly (instead of an unhandled 'error' event) when the port is taken
+  // or not permitted. The port is never changed silently.
+  server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`❌ Port ${config.port} is already in use — is another QueueLess backend already running?`);
+      console.error(`   Check: lsof -nP -iTCP:${config.port} -sTCP:LISTEN`);
+      console.error('   Stop that process, or set a different PORT in backend/.env (and VITE_DEV_BACKEND for the frontend proxy).');
+    } else if (error.code === 'EACCES') {
+      console.error(`❌ Permission denied to listen on port ${config.port}. Use a port above 1024.`);
+    } else {
+      console.error(`❌ HTTP server error: ${error.message}`);
+    }
+    shutdown('Server could not start', 1);
   });
-});
 
-// ── 8. 404 handler ────────────────────────────────────────────
-// Any request that didn't match a route above lands here.
-app.use((_req, res) => {
-  res.status(404).json({
-    success: false,
-    error: {
-      code: 'NOT_FOUND',
-      message: 'This route does not exist on the QueueLess API.',
-    },
+  server.listen(config.port, async () => {
+    console.log(`✅ QueueLess API listening on http://localhost:${config.port}`);
+    console.log(`   Health check   : http://localhost:${config.port}/api/health`);
+    console.log(`   Environment    : ${config.nodeEnv}`);
+    console.log(`   Allowed origins: ${config.frontendOrigins.join(', ')}`);
+
+    await waitForDatabase(prisma, {
+      onRetry: ({ attempt, delay, error }) =>
+        console.error(
+          `⚠️  Database not reachable (attempt ${attempt}): ${dbErrorSummary(error)} — retrying in ${delay / 1000}s. ` +
+            'API requests return 503 until it is back. Check DATABASE_URL if this persists.'
+        ),
+    });
+    if (shuttingDown) return;
+    console.log('✅ Database connection verified');
+
+    // Start the background processor only once this instance owns the port
+    // and the database is reachable.
+    if (config.workerEnabled) startWorker(config.sweepIntervalMs);
+    console.log(`   No-show worker : ${config.workerEnabled ? `every ${config.sweepIntervalMs / 1000}s` : 'disabled'}`);
   });
-});
 
-// ── 9. Startup: verify DB connectivity, then start server ─────
-async function startServer() {
-  // Attempt a real database ping before accepting traffic.
-  // This catches misconfigured DATABASE_URL immediately at startup.
-  try {
-    await prisma.$connect();
-    await prisma.$queryRaw`SELECT 1`;
-    console.log('✅ Database connection: verified (Neon PostgreSQL)');
-  } catch (err) {
-    // Print only the error message — never the connection string.
-    console.error('❌ Database connection failed:', err.message);
-    console.error('   Check DATABASE_URL in backend/.env');
-    console.error('   The server will NOT start without a working database connection.');
-    await prisma.$disconnect();
-    process.exit(1); // Exit with error — fail fast so problems are visible immediately
-  }
-
-  app.listen(PORT, () => {
-    console.log(`✅ QueueLess backend is running on http://localhost:${PORT}`);
-    console.log(`   Health check : http://localhost:${PORT}/api/health`);
-    console.log(`   Environment  : ${process.env.NODE_ENV || 'development'}`);
-    console.log(`   Frontend URL : ${FRONTEND_URL}`);
-    console.log('─────────────────────────────────────────────────');
-    console.log('   Auth         : Not implemented (Part 4)');
+  process.on('SIGINT', () => shutdown('SIGINT received'));
+  process.on('SIGTERM', () => shutdown('SIGTERM received'));
+  process.on('unhandledRejection', (reason) => {
+    console.error('[process] Unhandled promise rejection (server keeps running):', reason?.stack || reason);
+  });
+  process.on('uncaughtException', (error) => {
+    console.error('[process] Uncaught exception — restarting cleanly:', error?.stack || error);
+    shutdown('Uncaught exception', 1);
   });
 }
 
-startServer();
+start();

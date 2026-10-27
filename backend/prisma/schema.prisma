@@ -1,22 +1,22 @@
 // ─────────────────────────────────────────────────────────────
 // QueueLess — backend/prisma/schema.prisma
 //
-// This file defines every table (called a "model" in Prisma)
-// and every relationship between them.
+// Source of truth for the database structure.
+// Prisma version: 5.22.0 · Database: PostgreSQL (Neon)
 //
-// Generated from: docs/PROJECT_SPEC.md Section 6
-// Prisma version: 5.22.0
-// Database:       PostgreSQL (Neon)
-//
-// Key design decisions recorded here:
-//   - All IDs are UUIDs (uuid() default) — avoids sequential ID guessing
-//   - All timestamps are @db.Timestamptz — stored with timezone in PostgreSQL
-//   - Token number uniqueness: enforced by @@unique on DailyCounter and
-//     a @@unique on QueueEntry(orgId, serviceId, date, tokenNumber)
-//   - Organization isolation: every sensitive model carries organizationId
-//     so the server can check ownership on every request
-//   - Refresh tokens are stored hashed; the raw token is never persisted
-//   - QueueSettings has a 1-to-1 relation with Organization (one row per org)
+// Key design decisions:
+//   - All IDs are UUIDs — avoids sequential ID guessing.
+//   - All timestamps are timestamptz (stored in UTC).
+//   - Calendar "service dates" are plain DATE values computed in the
+//     organization's own timezone (Organization.timezone).
+//   - Token numbers are allocated through DailyCounter with an atomic
+//     INSERT … ON CONFLICT DO UPDATE inside a transaction, and protected
+//     by a UNIQUE constraint on QueueEntry (see docs/PROJECT_SPEC.md §4.1).
+//   - A partial unique index (raw SQL in the migration) guarantees a
+//     customer holds at most one active token per service per day.
+//   - Staff access is granted per organization through StaffMembership.
+//   - QR credentials, refresh tokens and staff invites are stored only as
+//     HMAC/SHA-256 hashes — raw secrets are never persisted.
 // ─────────────────────────────────────────────────────────────
 
 generator client {
@@ -28,321 +28,334 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─────────────────────────────────────────────────────────────
-// ENUMS
-// These are fixed lists of allowed values stored in the database.
-// ─────────────────────────────────────────────────────────────
+// ── Enums ────────────────────────────────────────────────────
 
-// The three roles a user account can have.
-// A user belongs to exactly one role forever (no role switching in this version).
+// Account type. Chosen at registration (customer / owner) or when a staff
+// invitation is accepted (staff).
 enum UserRole {
-  customer // A person who joins queues
-  staff // An employee of an organization
-  owner // The person who created and manages an organization
+  CUSTOMER
+  STAFF
+  OWNER
 }
 
-// The six states a queue token can be in.
-// See PROJECT_SPEC.md Section 4.3 for the full transition diagram.
+// Canonical token lifecycle. Transitions are enforced in
+// src/services/queueService.js — see docs/PROJECT_SPEC.md §4.3.
 enum TokenStatus {
-  waiting // Token issued; customer is in line
-  called // Staff called this token; customer should come to counter
-  serving // Customer has arrived and confirmed; service is in progress
-  completed // Service is done (terminal)
-  cancelled // Customer cancelled, or queue closed (terminal)
-  no_show // Grace period expired without customer arrival (terminal)
+  WAITING
+  CALLED
+  SERVING
+  COMPLETED
+  CANCELLED
+  NO_SHOW
 }
 
-// The two reasons a token can be cancelled.
-// Using an enum rather than a free string prevents invalid values in the database.
-// Values match PROJECT_SPEC.md Section 4.4 and 4.6 exactly.
 enum CancellationReason {
-  customer // Customer cancelled their own token via the app
-  queue_closed // Token auto-cancelled when the queue closed for the day
+  CUSTOMER // Customer cancelled while still WAITING ("advance cancellation")
+  QUEUE_CLOSED // Auto-cancelled because the service day ended
 }
 
-// ─────────────────────────────────────────────────────────────
-// MODEL: User
-// Every person who has an account on QueueLess.
-// Customers, staff, and owners all share this table.
-// ─────────────────────────────────────────────────────────────
+// Permission level of a staff member inside one organization.
+// SUPERVISOR additionally may pause/resume queues and make corrections.
+enum MembershipRole {
+  STAFF
+  SUPERVISOR
+}
+
+// ── Users and sessions ───────────────────────────────────────
+
 model User {
-  id           String @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid()) @db.Uuid
   name         String
-  email        String @unique
-  // Passwords are stored as a bcrypt hash — never the raw password.
-  // This field is populated during authentication (Part 4).
-  passwordHash String
-
-  role UserRole @default(customer)
-
-  // For staff and owners: which organization they belong to.
-  // For customers: this is null (customers are not tied to one org).
-  // A staff member belongs to at most one organization (PROJECT_SPEC.md Section 8).
-  organizationId String? @db.Uuid
+  email        String   @unique // Always stored lower-cased
+  passwordHash String // bcrypt hash — never the raw password
+  role         UserRole @default(CUSTOMER)
 
   createdAt DateTime @default(now()) @db.Timestamptz
   updatedAt DateTime @updatedAt @db.Timestamptz
 
-  // Relations
-  organization  Organization?  @relation("OrgMembers", fields: [organizationId], references: [id])
-  ownedOrg      Organization?  @relation("OrgOwner") // The org this user owns (null if not owner)
-  queueEntries  QueueEntry[] // All tokens this customer has ever received
-  refreshTokens RefreshToken[] // Active login sessions
+  ownedOrgs     Organization[]        @relation("OrgOwner")
+  memberships   StaffMembership[]
+  queueEntries  QueueEntry[]
+  refreshTokens RefreshToken[]
+  restrictions  CustomerRestriction[]
+  auditLogs     AuditLog[]
+  invitesSent   StaffInvite[]
 
-  @@index([organizationId])
   @@map("users")
 }
 
-// ─────────────────────────────────────────────────────────────
-// MODEL: Organization
-// A clinic, salon, college office, etc. registered on QueueLess.
-// ─────────────────────────────────────────────────────────────
-model Organization {
-  id          String  @id @default(uuid()) @db.Uuid
-  name        String
-  description String?
-  address     String?
-  phone       String?
-
-  // The user account that created and owns this organization.
-  // One owner can own at most one organization in this implementation.
-  ownerId String @unique @db.Uuid
-
-  createdAt DateTime @default(now()) @db.Timestamptz
-  updatedAt DateTime @updatedAt @db.Timestamptz
-
-  // Relations
-  owner         User           @relation("OrgOwner", fields: [ownerId], references: [id])
-  members       User[]         @relation("OrgMembers") // Staff and the owner's user record
-  services      Service[]
-  queueEntries  QueueEntry[]
-  dailyCounters DailyCounter[]
-  refreshTokens RefreshToken[]
-  settings      QueueSettings?
-
-  @@map("organizations")
-}
-
-// ─────────────────────────────────────────────────────────────
-// MODEL: Service
-// A specific type of service an organization offers.
-// Example: "General Checkup", "Haircut - Men's", "Admissions Enquiry"
-// ─────────────────────────────────────────────────────────────
-model Service {
-  id             String  @id @default(uuid()) @db.Uuid
-  organizationId String  @db.Uuid
-  name           String
-  description    String?
-
-  // The owner's estimate of how long one service session takes.
-  // Used to calculate Estimated Wait Time (EWT).
-  // EWT = queue_position × avgDurationMinutes (PROJECT_SPEC.md Section 4.2)
-  avgDurationMinutes Int @default(15)
-
-  // When isActive is false, customers cannot join this service's queue.
-  isActive Boolean @default(true)
-
-  createdAt DateTime @default(now()) @db.Timestamptz
-  updatedAt DateTime @updatedAt @db.Timestamptz
-
-  // Relations
-  organization  Organization   @relation(fields: [organizationId], references: [id])
-  queueEntries  QueueEntry[]
-  dailyCounters DailyCounter[]
-
-  @@index([organizationId])
-  @@map("services")
-}
-
-// ─────────────────────────────────────────────────────────────
-// MODEL: QueueEntry
-// One row = one token issued to one customer.
-// This is the central table of the entire system.
-// See PROJECT_SPEC.md Sections 4.1–4.7 for all rules.
-// ─────────────────────────────────────────────────────────────
-model QueueEntry {
-  id             String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  serviceId      String @db.Uuid
-  userId         String @db.Uuid // The customer who holds this token
-
-  // The sequential number within (org, service, date).
-  // Generated atomically via DailyCounter — see PROJECT_SPEC.md Section 4.1.
-  tokenNumber Int
-
-  // The calendar date this token belongs to (YYYY-MM-DD stored as Date).
-  // Tokens from different days are completely separate.
-  date DateTime @db.Date
-
-  // Current lifecycle status. See the TokenStatus enum and
-  // PROJECT_SPEC.md Section 4.3 for the allowed transitions.
-  status TokenStatus @default(waiting)
-
-  // ── QR verification fields ──────────────────────────────────
-  // Set when status changes to 'called'. Cleared after use.
-  // See PROJECT_SPEC.md Section 4.7 for the full QR flow.
-  //
-  // qrSecret:    A random UUID stored server-side for validation.
-  //              The QR code encodes (tokenId + qrSecret).
-  //              Never null when status = 'called'.
-  // qrExpiresAt: 5 minutes after calledAt. Expired QRs are rejected.
-  // qrUsed:      True after staff scans the QR. One-time use only.
-  qrSecret    String?   @db.Uuid
-  qrExpiresAt DateTime? @db.Timestamptz
-  qrUsed      Boolean   @default(false)
-
-  // ── Lifecycle timestamps ────────────────────────────────────
-  // Each is set exactly once when the corresponding transition happens.
-  calledAt    DateTime? @db.Timestamptz // When staff called this token
-  servingAt   DateTime? @db.Timestamptz // When customer confirmed arrival (serving starts)
-  completedAt DateTime? @db.Timestamptz // When service finished
-  noShowAt    DateTime? @db.Timestamptz // When no-show was recorded (background job or manual)
-
-  // ── No-show enforcement ─────────────────────────────────────
-  // noShowDeadline is set at the same time as calledAt.
-  // Formula: calledAt + org.settings.noShowGracePeriodMinutes
-  // The background job queries: WHERE status='called' AND noShowDeadline < NOW()
-  // This deadline MUST survive server restarts — hence it is persisted in the DB.
-  // See PROJECT_SPEC.md Section 4.5.
-  noShowDeadline DateTime? @db.Timestamptz
-
-  // ── Cancellation audit ──────────────────────────────────────
-  // Set when status = 'cancelled'. Uses a typed enum to prevent invalid values.
-  // 'customer'     = customer cancelled their own token (Section 4.4)
-  // 'queue_closed' = auto-cancelled when the queue closed for the day (Section 4.6)
-  cancellationReason CancellationReason?
-
-  createdAt DateTime @default(now()) @db.Timestamptz
-  updatedAt DateTime @updatedAt @db.Timestamptz
-
-  // Relations
-  organization Organization @relation(fields: [organizationId], references: [id])
-  service      Service      @relation(fields: [serviceId], references: [id])
-  user         User         @relation(fields: [userId], references: [id])
-
-  // ── Uniqueness constraint ───────────────────────────────────
-  // No two tokens can have the same number for the same org/service/date.
-  // This is the safety-net constraint — the primary mechanism is
-  // DailyCounter's atomic increment. (PROJECT_SPEC.md Section 4.1)
-  @@unique([organizationId, serviceId, date, tokenNumber])
-  // ── Performance indexes ─────────────────────────────────────
-  // Used by: staff queue view, customer position lookup, background job
-  @@index([organizationId, serviceId, date, status])
-  // Used by: customer's active token lookup
-  @@index([userId, date])
-  // Used by: background no-show job (WHERE status='called' AND noShowDeadline < NOW())
-  @@index([status, noShowDeadline])
-  @@map("queue_entries")
-}
-
-// ─────────────────────────────────────────────────────────────
-// MODEL: DailyCounter
-// One row per (organization, service, calendar date).
-// Used to generate unique, sequential token numbers safely
-// even when many customers join at the same time.
-//
-// The server runs this atomic SQL on every join:
-//   UPDATE daily_counters
-//   SET current_count = current_count + 1
-//   WHERE organization_id = $1 AND service_id = $2 AND date = $3
-//   RETURNING current_count;
-//
-// The returned value becomes the new token's number.
-// See PROJECT_SPEC.md Section 4.1.
-// ─────────────────────────────────────────────────────────────
-model DailyCounter {
-  id             String   @id @default(uuid()) @db.Uuid
-  organizationId String   @db.Uuid
-  serviceId      String   @db.Uuid
-  date           DateTime @db.Date
-
-  // The highest token number issued so far for this org/service/date.
-  // Starts at 0. Incremented atomically before each new token is created.
-  currentCount Int @default(0)
-
-  // Relations
-  organization Organization @relation(fields: [organizationId], references: [id])
-  service      Service      @relation(fields: [serviceId], references: [id])
-
-  // Each org/service/date combination has exactly one counter row.
-  @@unique([organizationId, serviceId, date])
-  @@map("daily_counters")
-}
-
-// ─────────────────────────────────────────────────────────────
-// MODEL: RefreshToken
-// Server-side record of active refresh token sessions.
-// Used to validate and revoke sessions on logout.
-// See PROJECT_SPEC.md Section 5.4 and 5.7.
-//
-// The actual token value is NEVER stored here.
-// Only a SHA-256 hash of the token is stored.
-// This means even if the database is compromised,
-// the raw token values cannot be recovered.
-// ─────────────────────────────────────────────────────────────
+// One row per login session. The JWT access token carries this row's id
+// ("sid"), so revoking the row immediately invalidates the session.
 model RefreshToken {
-  id String @id @default(uuid()) @db.Uuid
-
-  // SHA-256 hash of the raw random token sent to the browser.
-  tokenHash String @unique
-
-  userId         String  @db.Uuid
-  organizationId String? @db.Uuid // Stored for quick org-scoped revocation
-
+  id        String    @id @default(uuid()) @db.Uuid
+  tokenHash String    @unique // SHA-256 of the raw random token in the cookie
+  userId    String    @db.Uuid
   expiresAt DateTime  @db.Timestamptz
-  revoked   Boolean   @default(false)
   revokedAt DateTime? @db.Timestamptz
+  userAgent String?
+  createdAt DateTime  @default(now()) @db.Timestamptz
 
-  createdAt DateTime @default(now()) @db.Timestamptz
-
-  // Relations
-  user         User          @relation(fields: [userId], references: [id])
-  organization Organization? @relation(fields: [organizationId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
-  @@index([tokenHash])
   @@map("refresh_tokens")
 }
 
-// ─────────────────────────────────────────────────────────────
-// MODEL: QueueSettings
-// Per-organization configuration for the queue.
-// One row per organization (1-to-1 with Organization).
-// Created with defaults when an organization is first created.
-// ─────────────────────────────────────────────────────────────
+// ── Organizations ────────────────────────────────────────────
+
+model Organization {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String
+  slug        String  @unique
+  category    String // One of ORG_CATEGORIES in src/lib/constants.js
+  description String?
+  address     String?
+  city        String?
+  phone       String?
+  email       String?
+  // IANA timezone, e.g. "Asia/Kolkata". Determines the service date and
+  // whether the organization is currently open.
+  timezone    String  @default("Asia/Kolkata")
+  // Inactive organizations are hidden from public browsing and cannot
+  // accept new tokens.
+  isActive    Boolean @default(true)
+  ownerId     String  @db.Uuid
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  owner         User                  @relation("OrgOwner", fields: [ownerId], references: [id])
+  settings      QueueSettings?
+  services      Service[]
+  memberships   StaffMembership[]
+  invites       StaffInvite[]
+  queueEntries  QueueEntry[]
+  dailyCounters DailyCounter[]
+  restrictions  CustomerRestriction[]
+  qrCredentials QrCredential[]
+  auditLogs     AuditLog[]
+
+  @@index([ownerId])
+  @@index([isActive, category])
+  @@map("organizations")
+}
+
+// Per-organization queue configuration (1-to-1 with Organization).
 model QueueSettings {
   id             String @id @default(uuid()) @db.Uuid
   organizationId String @unique @db.Uuid
 
-  // Maximum number of tokens per service per day.
-  // Default 100. When this limit is reached, new joins are rejected
-  // with QUEUE_FULL error. (PROJECT_SPEC.md Section 4.1)
+  // Default maximum tokens per service per service date.
   maxDailyTokens Int @default(100)
 
-  // How many minutes a customer has to arrive after being called.
-  // Default 10. The noShowDeadline on QueueEntry is calculated from this.
-  // (PROJECT_SPEC.md Section 4.5)
-  noShowGracePeriodMinutes Int @default(10)
+  // Minutes a called customer has to confirm arrival before they may be
+  // marked NO_SHOW. Policy default: 5 minutes.
+  noShowGracePeriodMinutes Int @default(5)
 
-  // Daily operating hours stored as "HH:MM" strings (24-hour, local time).
-  // At queueCloseTime, all 'waiting' tokens are auto-cancelled.
-  // NOTE: Timezone handling is not yet fully designed.
-  //       For now, times are interpreted as IST (UTC+5:30).
-  //       This will be revisited before Part 8.
-  // (PROJECT_SPEC.md Section 4.6, Open Decision OD-1, OD-2)
-  queueOpenTime  String @default("09:00")
-  queueCloseTime String @default("17:00")
+  // Lifetime of each QR credential shown to the customer, in seconds.
+  qrTtlSeconds Int @default(120)
 
-  // Whether the queue is currently paused by staff.
-  // Exact behavior of pausing is Open Decision OD-5 — not yet defined.
-  // This field is added to support that future decision.
-  isPaused Boolean @default(false)
+  // Weekly operating hours in the organization's timezone.
+  // Array of 7 objects indexed by weekday (0 = Sunday):
+  //   { "closed": false, "open": "09:00", "close": "17:00" }
+  weeklyHours Json
 
   createdAt DateTime @default(now()) @db.Timestamptz
   updatedAt DateTime @updatedAt @db.Timestamptz
 
-  // Relations
-  organization Organization @relation(fields: [organizationId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@map("queue_settings")
+}
+
+model Service {
+  id                 String    @id @default(uuid()) @db.Uuid
+  organizationId     String    @db.Uuid
+  name               String
+  description        String?
+  // Short prefix shown before token numbers, e.g. "GC" → GC-007.
+  tokenPrefix        String    @default("A")
+  // Owner's estimate of one service session; used for waiting estimates.
+  avgDurationMinutes Int       @default(10)
+  // Optional per-service override of QueueSettings.maxDailyTokens.
+  maxDailyTokens     Int?
+  // Inactive services are hidden and cannot accept tokens.
+  isActive           Boolean   @default(true)
+  // Paused services keep existing tokens but block new joins and call-next.
+  isPaused           Boolean   @default(false)
+  pausedAt           DateTime? @db.Timestamptz
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  queueEntries  QueueEntry[]
+  dailyCounters DailyCounter[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("services")
+}
+
+// ── Staff access ─────────────────────────────────────────────
+
+// Grants a STAFF user access to one organization. A staff user may hold
+// memberships in several organizations; each is authorized separately.
+model StaffMembership {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @db.Uuid
+  organizationId String         @db.Uuid
+  role           MembershipRole @default(STAFF)
+  createdAt      DateTime       @default(now()) @db.Timestamptz
+  updatedAt      DateTime       @updatedAt @db.Timestamptz
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("staff_memberships")
+}
+
+// Single-use invitation link created by an owner. Only a SHA-256 hash of
+// the invitation token is stored.
+model StaffInvite {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  email          String
+  role           MembershipRole @default(STAFF)
+  tokenHash      String         @unique
+  expiresAt      DateTime       @db.Timestamptz
+  acceptedAt     DateTime?      @db.Timestamptz
+  revokedAt      DateTime?      @db.Timestamptz
+  createdById    String         @db.Uuid
+  createdAt      DateTime       @default(now()) @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation(fields: [createdById], references: [id])
+
+  @@index([organizationId])
+  @@map("staff_invites")
+}
+
+// ── Queue ────────────────────────────────────────────────────
+
+// One row = one token issued to one customer.
+model QueueEntry {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @db.Uuid
+  serviceId      String      @db.Uuid
+  userId         String      @db.Uuid
+  tokenNumber    Int
+  // Calendar date in the organization's timezone when the token was issued.
+  serviceDate    DateTime    @db.Date
+  status         TokenStatus @default(WAITING)
+
+  // ── Lifecycle timestamps (server clock) ─────────────────────
+  calledAt           DateTime?           @db.Timestamptz
+  // calledAt + grace period. Persisted so the policy survives restarts.
+  noShowDeadline     DateTime?           @db.Timestamptz
+  // Set when staff successfully validated the customer's QR credential.
+  arrivalRequestedAt DateTime?           @db.Timestamptz
+  // Set only when the customer explicitly confirmed arrival.
+  arrivalConfirmedAt DateTime?           @db.Timestamptz
+  servingAt          DateTime?           @db.Timestamptz
+  completedAt        DateTime?           @db.Timestamptz
+  cancelledAt        DateTime?           @db.Timestamptz
+  cancellationReason CancellationReason?
+  noShowAt           DateTime?           @db.Timestamptz
+  // An excused no-show stays NO_SHOW for history but is not counted
+  // towards restrictions. Set by an authorized staff correction.
+  noShowExcused      Boolean             @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  service       Service        @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  user          User           @relation(fields: [userId], references: [id])
+  qrCredentials QrCredential[]
+
+  // No two tokens share a number within (organization, service, date).
+  @@unique([organizationId, serviceId, serviceDate, tokenNumber])
+  @@index([organizationId, serviceId, serviceDate, status])
+  @@index([userId, status])
+  @@index([status, noShowDeadline])
+  @@index([userId, organizationId, status, noShowAt])
+  @@map("queue_entries")
+}
+
+model DailyCounter {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  serviceId      String   @db.Uuid
+  serviceDate    DateTime @db.Date
+  currentCount   Int      @default(0)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  service      Service      @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, serviceId, serviceDate])
+  @@map("daily_counters")
+}
+
+// Short-lived, single-use credential encoded in the customer's QR code.
+// Separate from session credentials. secretHash/codeHash are HMAC-SHA256.
+model QrCredential {
+  id             String    @id @default(uuid()) @db.Uuid
+  queueEntryId   String    @db.Uuid
+  organizationId String    @db.Uuid
+  secretHash     String    @unique
+  // Hash of the short manual code (camera-free fallback).
+  codeHash       String
+  expiresAt      DateTime  @db.Timestamptz
+  usedAt         DateTime? @db.Timestamptz
+  usedById       String?   @db.Uuid
+  revokedAt      DateTime? @db.Timestamptz
+  failedAttempts Int       @default(0)
+  createdAt      DateTime  @default(now()) @db.Timestamptz
+
+  queueEntry   QueueEntry   @relation(fields: [queueEntryId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([queueEntryId])
+  @@map("qr_credentials")
+}
+
+// Organization-specific joining restriction created by the no-show policy.
+model CustomerRestriction {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @db.Uuid
+  organizationId String    @db.Uuid
+  startsAt       DateTime  @db.Timestamptz
+  endsAt         DateTime  @db.Timestamptz
+  reason         String
+  liftedAt       DateTime? @db.Timestamptz
+  liftedById     String?   @db.Uuid
+  createdAt      DateTime  @default(now()) @db.Timestamptz
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, organizationId, endsAt])
+  @@index([organizationId])
+  @@map("customer_restrictions")
+}
+
+// Append-only record of administrative and queue-state changes.
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @db.Uuid
+  actorId        String?  @db.Uuid // null = system (background processor)
+  action         String
+  entityType     String
+  entityId       String?
+  details        Json?
+  createdAt      DateTime @default(now()) @db.Timestamptz
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?         @relation(fields: [actorId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
 }

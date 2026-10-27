@@ -43,8 +43,10 @@ yarn-error.log*
 pnpm-debug.log*
 
 # ── Operating system files ───────────────────────────────────
-.DS_Store          # macOS folder metadata
-Thumbs.db          # Windows thumbnail cache
+# macOS folder metadata
+.DS_Store
+# Windows thumbnail cache
+Thumbs.db
 desktop.ini
 
 # ── Editor / IDE settings ────────────────────────────────────
@@ -59,6 +61,12 @@ coverage/
 .nyc_output/
 
 # ── Miscellaneous ────────────────────────────────────────────
-*.pem              # Certificate/key files
+# Certificate/key files (Git does not support comments after a pattern)
+*.pem
+*.key
 .cache/
 tmp/
+
+# ── Local tooling ────────────────────────────────────────────
+# Local dev-server launcher used by the Claude desktop app (not part of the app).
+.claude/launch.json
